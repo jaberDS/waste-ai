@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Waste classifier</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex;
+           justify-content: center; align-items: flex-start; min-height: 100vh; padding: 40px 16px; }
+    .card { background: white; border-radius: 16px; border: 1px solid #e5e5e5;
+            width: 100%; max-width: 480px; padding: 28px; }
+    h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+    .subtitle { font-size: 14px; color: #666; margin-bottom: 20px; }
+
+    .drop-zone { border: 2px dashed #ccc; border-radius: 12px; padding: 36px 16px;
+                 text-align: center; cursor: pointer; transition: border-color .2s;
+                 margin-bottom: 16px; }
+    .drop-zone:hover, .drop-zone.over { border-color: #4a90e2; }
+    .drop-zone p { font-size: 14px; color: #555; margin-top: 8px; }
+    .drop-zone small { font-size: 12px; color: #999; }
+
+    #preview-wrap { display: none; margin-bottom: 16px; }
+    #preview { width: 100%; max-height: 220px; object-fit: contain;
+               border-radius: 10px; border: 1px solid #e5e5e5; }
+
+    button { width: 100%; padding: 11px; font-size: 15px; font-weight: 500;
+             background: #111; color: white; border: none; border-radius: 10px;
+             cursor: pointer; transition: opacity .15s; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    button:hover:not(:disabled) { opacity: .85; }
+
+    #result { display: none; margin-top: 20px; background: #f9f9f9;
+              border-radius: 12px; padding: 16px; }
+    .result-top { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .result-label { font-size: 22px; font-weight: 600; color: #2563eb; text-transform: capitalize; }
+    .conf-badge { font-size: 12px; background: #dbeafe; color: #1d4ed8;
+                  padding: 3px 10px; border-radius: 20px; font-weight: 500; }
+    .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+    .bar-label { font-size: 13px; color: #555; width: 76px; text-transform: capitalize; }
+    .bar-track { flex: 1; height: 7px; background: #e5e5e5; border-radius: 4px; }
+    .bar-fill { height: 7px; border-radius: 4px; background: #3b82f6; transition: width .4s ease; }
+    .bar-val { font-size: 12px; color: #999; width: 38px; text-align: right; }
+    .error-msg { margin-top: 12px; font-size: 13px; color: #dc2626; display: none; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Waste classifier</h1>
+  <p class="subtitle">Upload a photo to identify the waste type</p>
+
+  <div class="drop-zone" id="drop-zone">
+    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" style="margin:0 auto">
+      <path d="M16 4v16M10 10l6-6 6 6M6 24h20" stroke="#aaa" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <p>Drop image here</p>
+    <small>or click to browse — JPG, PNG</small>
+  </div>
+  <input type="file" id="file-input" accept="image/*" style="display:none">
+
+  <div id="preview-wrap"><img id="preview" src="" alt="preview"></div>
+
+  <button id="predict-btn" disabled>Predict</button>
+  <p class="error-msg" id="error-msg"></p>
+
+  <div id="result">
+    <div class="result-top">
+      <span class="result-label" id="res-label"></span>
+      <span class="conf-badge" id="res-conf"></span>
+    </div>
+    <p style="font-size:12px;color:#888;margin-bottom:8px">All classes</p>
+    <div id="bars"></div>
+  </div>
+</div>
+
+<script>
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+  const predictBtn = document.getElementById('predict-btn');
+  const previewWrap = document.getElementById('preview-wrap');
+  const preview = document.getElementById('preview');
+  const resultDiv = document.getElementById('result');
+  const errorMsg = document.getElementById('error-msg');
+  let selectedFile = null;
+
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('over');
+    if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+
+  function setFile(file) {
+    selectedFile = file;
+    preview.src = URL.createObjectURL(file);
+    previewWrap.style.display = 'block';
+    resultDiv.style.display = 'none';
+    errorMsg.style.display = 'none';
+    predictBtn.disabled = false;
+  }
+
+  predictBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    predictBtn.disabled = true;
+    predictBtn.textContent = 'Predicting...';
+    errorMsg.style.display = 'none';
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+      const res = await fetch('/predict', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.error) throw new Error(data.error);
+
+      document.getElementById('res-label').textContent = data.prediction;
+      document.getElementById('res-conf').textContent = data.confidence + '%';
+
+      const barsEl = document.getElementById('bars');
+      barsEl.innerHTML = data.all.map(item => `
+        <div class="bar-row">
+          <span class="bar-label">${item.class}</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${item.confidence}%"></div></div>
+          <span class="bar-val">${item.confidence}%</span>
+        </div>`).join('');
+
+      resultDiv.style.display = 'block';
+    } catch (err) {
+      errorMsg.textContent = 'Error: ' + err.message;
+      errorMsg.style.display = 'block';
+    }
+
+    predictBtn.disabled = false;
+    predictBtn.textContent = 'Predict';
+  });
+</script>
+</body>
+</html>
